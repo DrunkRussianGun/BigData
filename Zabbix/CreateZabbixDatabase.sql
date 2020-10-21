@@ -1,0 +1,3 @@
+CREATE USER zabbix WITH PASSWORD 'password';
+CREATE DATABASE zabbix;
+GRANT CREATE ON DATABASE zabbix TO zabbix;
