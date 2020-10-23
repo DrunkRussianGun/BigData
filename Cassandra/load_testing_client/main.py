@@ -54,8 +54,19 @@ def run_load_test(keyspace_name, table_name, rows_count, config):
 	prepared_insert_query = session.prepare(query_to_prepare)
 
 	logging.info(f"Inserting {rows_count} rows into table {table_name} with prepared query")
-	for i in range(0, rows_count):
-		session.execute(prepared_insert_query, [i, f"'name_{i}'"])
+
+	def insert_new_row(id: int):
+		session.execute(prepared_insert_query, [id, f"'name_{id}'"])
+
+	if rows_count is None:
+		row_id = 0
+		while True:
+			insert_new_row(row_id)
+			row_id += 1
+	else:
+		for row_id in range(0, rows_count):
+			insert_new_row(row_id)
+
 	logging.info(f"Successfully inserted into table {table_name}")
 
 
