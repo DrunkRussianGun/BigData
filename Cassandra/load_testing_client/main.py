@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import random
 import sys
 
 from cassandra.auth import PlainTextAuthProvider
@@ -37,7 +38,10 @@ def get_json_config(json_file: str):
 	return json.load(file)
 
 
-def run_load_test(keyspace_name, table_name, rows_count, config):
+def run_load_test(keyspace_name, table_name, rows_count, min_row_id, max_row_id, config):
+	min_row_id = min_row_id if min_row_id is not None else 0
+	max_row_id = max_row_id if max_row_id is not None else 2147483647
+
 	username = config["username"]
 	password = config["password"]
 	hosts = config["hosts"]
@@ -55,17 +59,16 @@ def run_load_test(keyspace_name, table_name, rows_count, config):
 
 	logging.info(f"Inserting {rows_count} rows into table {table_name} with prepared query")
 
-	def insert_new_row(id: int):
-		session.execute(prepared_insert_query, [id, f"'name_{id}'"])
+	def insert_new_row():
+		row_id = int(round(random.uniform(min_row_id, max_row_id)))
+		session.execute(prepared_insert_query, [row_id, f"'name_{row_id}'"])
 
 	if rows_count is None:
-		row_id = 0
 		while True:
-			insert_new_row(row_id)
-			row_id += 1
+			insert_new_row()
 	else:
-		for row_id in range(0, rows_count):
-			insert_new_row(row_id)
+		for _ in range(0, rows_count):
+			insert_new_row()
 
 	logging.info(f"Successfully inserted into table {table_name}")
 
