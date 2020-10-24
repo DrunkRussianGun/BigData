@@ -1,14 +1,15 @@
+import argparse
 import json
 import logging
 import os
 import random
-import sys
+from typing import Union
 
 from cassandra.auth import PlainTextAuthProvider
 from cassandra.cluster import Cluster
 
 
-def configure_logging():
+def initialize_logger() -> logging.Logger:
 	log_formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
 	root_logger = logging.getLogger()
 	root_logger.setLevel(logging.DEBUG)
@@ -30,6 +31,26 @@ def configure_logging():
 	console_handler.setLevel(logging.WARNING)
 	root_logger.addHandler(console_handler)
 
+	return root_logger
+
+
+def initialize_argument_parser() -> argparse.ArgumentParser:
+	parser = argparse.ArgumentParser()
+	parser.add_argument("-k", "--keyspace")
+	parser.add_argument("-c", "--count", type = int, help = "count of rows to insert")
+	parser.add_argument(
+		"--min-id",
+		type = int,
+		help = "minimum allowed row id (default 0)",
+		default = 0)
+	parser.add_argument(
+		"--max-id",
+		type = int,
+		help = "maximum allowed row id (default 2147483647)",
+		default = 2147483647)
+	parser.add_argument("table_name", metavar = "TABLE_NAME")
+	return parser
+
 
 def get_json_config(json_file: str):
 	logging.info("Reading config from JSON file " + json_file)
@@ -38,10 +59,13 @@ def get_json_config(json_file: str):
 	return json.load(file)
 
 
-def run_load_test(keyspace_name, table_name, rows_count, min_row_id, max_row_id, config):
-	min_row_id = min_row_id if min_row_id is not None else 0
-	max_row_id = max_row_id if max_row_id is not None else 2147483647
-
+def run_load_test(
+		keyspace_name: Union[str, None],
+		table_name: str,
+		rows_count: Union[int, None],
+		min_row_id: int,
+		max_row_id: int,
+		config):
 	username = config["username"]
 	password = config["password"]
 	hosts = config["hosts"]
@@ -52,7 +76,8 @@ def run_load_test(keyspace_name, table_name, rows_count, min_row_id, max_row_id,
 	session = cluster.connect()
 	logging.info("Connection to Cassandra established")
 
-	session.set_keyspace(keyspace_name)
+	if keyspace_name is not None:
+		session.set_keyspace(keyspace_name)
 	query_to_prepare = f"INSERT INTO {table_name}(id, name) VALUES (?, ?)"
 	logging.info("Preparing query:" + os.linesep + query_to_prepare)
 	prepared_insert_query = session.prepare(query_to_prepare)
@@ -74,21 +99,20 @@ def run_load_test(keyspace_name, table_name, rows_count, min_row_id, max_row_id,
 
 
 def main():
-	configure_logging()
+	initialize_logger()
 
-	if len(sys.argv) != 4:
-		logging.error(
-			f"Wrong command line arguments: {sys.argv}" + os.linesep
-			+ "Expected: <path to application> <keyspace name> <table name> <count of rows to insert>")
-		exit(1)
-
-	keyspace_name = sys.argv[1]
-	table_name = sys.argv[2]
-	rows_count = int(sys.argv[3])
+	argument_parser = initialize_argument_parser()
+	args = argument_parser.parse_args()
 
 	config = get_json_config("config.json")
 
-	run_load_test(keyspace_name, table_name, rows_count, config)
+	run_load_test(
+		args.keyspace,
+		args.table_name,
+		args.count,
+		args.min_id,
+		args.max_id,
+		config)
 
 
 if __name__ == "__main__":
