@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import json
 import logging
 import os
@@ -39,6 +40,12 @@ def initialize_argument_parser() -> argparse.ArgumentParser:
 	parser.add_argument("-k", "--keyspace")
 	parser.add_argument("-c", "--count", type = int, help = "count of rows to insert")
 	parser.add_argument(
+		"-p",
+		"--parallel",
+		type = int,
+		help = "count of parallel connections",
+		default = 1)
+	parser.add_argument(
 		"--min-id",
 		type = int,
 		help = "minimum allowed row id (default 0)",
@@ -59,20 +66,13 @@ def get_json_config(json_file: str):
 	return json.load(file)
 
 
-def run_load_test(
+async def start_test_on_new_connection(
+		cluster: Cluster,
 		keyspace_name: Union[str, None],
 		table_name: str,
 		rows_count: Union[int, None],
 		min_row_id: int,
-		max_row_id: int,
-		config):
-	username = config["username"]
-	password = config["password"]
-	hosts = config["hosts"]
-
-	logging.info("Trying to connect to Cassandra")
-	auth_provider = PlainTextAuthProvider(username = username, password = password)
-	cluster = Cluster(hosts, auth_provider = auth_provider)
+		max_row_id: int):
 	session = cluster.connect()
 	logging.info("Connection to Cassandra established")
 
@@ -95,6 +95,35 @@ def run_load_test(
 		for _ in range(0, rows_count):
 			insert_new_row()
 
+
+def run_load_test(
+		keyspace_name: Union[str, None],
+		table_name: str,
+		rows_count: Union[int, None],
+		connections_count: int,
+		min_row_id: int,
+		max_row_id: int,
+		config):
+	username = config["username"]
+	password = config["password"]
+	hosts = config["hosts"]
+
+	logging.info("Trying to connect to Cassandra")
+	auth_provider = PlainTextAuthProvider(username = username, password = password)
+	cluster = Cluster(hosts, auth_provider = auth_provider)
+
+	event_loop = asyncio.get_event_loop()
+	futures = [
+		event_loop.create_task(start_test_on_new_connection(
+			cluster,
+			keyspace_name,
+			table_name,
+			rows_count,
+			min_row_id,
+			max_row_id))
+		for _ in range(connections_count)]
+	event_loop.run_until_complete(asyncio.wait(futures))
+
 	logging.info(f"Successfully inserted into table {table_name}")
 
 
@@ -110,6 +139,7 @@ def main():
 		args.keyspace,
 		args.table_name,
 		args.count,
+		args.parallel,
 		args.min_id,
 		args.max_id,
 		config)
