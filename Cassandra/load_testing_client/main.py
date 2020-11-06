@@ -85,16 +85,23 @@ async def start_test_on_new_connection_async(
 	rows_count_str = str(rows_count) if rows_count is not None else "infinite"
 	logging.info(f"Inserting {rows_count_str} rows into table {table_name} with prepared query")
 
-	def insert_new_row():
+	# noinspection PyShadowingNames
+	def insert_new_row(inserted_rows_count):
 		row_id = int(round(random.uniform(min_row_id, max_row_id)))
 		session.execute(prepared_insert_query, [row_id, f"'name_{row_id}'"])
 
+		if inserted_rows_count % 1000 == 0:
+			logging.info(f"Inserted {inserted_rows_count} rows")
+
+	inserted_rows_count = 0
 	if rows_count is None:
 		while True:
-			insert_new_row()
+			insert_new_row(inserted_rows_count)
+			inserted_rows_count += 1
 	else:
 		for _ in range(0, rows_count):
-			insert_new_row()
+			insert_new_row(inserted_rows_count)
+			inserted_rows_count += 1
 
 
 async def run_load_test_async(
