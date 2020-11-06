@@ -88,7 +88,11 @@ async def start_test_on_new_connection_async(
 	# noinspection PyShadowingNames
 	def insert_new_row(inserted_rows_count):
 		row_id = int(round(random.uniform(min_row_id, max_row_id)))
-		session.execute(prepared_insert_query, [row_id, f"'name_{row_id}'"])
+		# noinspection PyBroadException
+		try:
+			session.execute(prepared_insert_query, [row_id, f"'name_{row_id}'"])
+		except Exception:
+			pass
 
 		if inserted_rows_count % 1000 == 0:
 			logging.info(f"Inserted {inserted_rows_count} rows")
