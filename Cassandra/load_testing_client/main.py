@@ -39,12 +39,12 @@ def initialize_argument_parser() -> argparse.ArgumentParser:
 	parser = argparse.ArgumentParser()
 	parser.add_argument("-k", "--keyspace")
 	parser.add_argument("-c", "--count", type = int, help = "count of rows to insert")
-	parser.add_argument(
-		"-p",
-		"--parallel",
-		type = int,
-		help = "count of parallel connections",
-		default = 1)
+	# parser.add_argument(
+	# 	"-p",
+	# 	"--parallel",
+	# 	type = int,
+	# 	help = "count of parallel connections",
+	# 	default = 1)
 	parser.add_argument(
 		"--min-id",
 		type = int,
@@ -66,7 +66,7 @@ def get_json_config(json_file: str):
 	return json.load(file)
 
 
-async def start_test_on_new_connection(
+async def start_test_on_new_connection_async(
 		cluster: Cluster,
 		keyspace_name: Union[str, None],
 		table_name: str,
@@ -96,11 +96,11 @@ async def start_test_on_new_connection(
 			insert_new_row()
 
 
-def run_load_test(
+async def run_load_test_async(
 		keyspace_name: Union[str, None],
 		table_name: str,
 		rows_count: Union[int, None],
-		connections_count: int,
+		# connections_count: int,
 		min_row_id: int,
 		max_row_id: int,
 		config):
@@ -112,17 +112,13 @@ def run_load_test(
 	auth_provider = PlainTextAuthProvider(username = username, password = password)
 	cluster = Cluster(hosts, auth_provider = auth_provider)
 
-	event_loop = asyncio.get_event_loop()
-	futures = [
-		event_loop.create_task(start_test_on_new_connection(
-			cluster,
-			keyspace_name,
-			table_name,
-			rows_count,
-			min_row_id,
-			max_row_id))
-		for _ in range(connections_count)]
-	event_loop.run_until_complete(asyncio.wait(futures))
+	await start_test_on_new_connection_async(
+		cluster,
+		keyspace_name,
+		table_name,
+		rows_count,
+		min_row_id,
+		max_row_id)
 
 	logging.info(f"Successfully inserted into table {table_name}")
 
@@ -135,14 +131,15 @@ def main():
 
 	config = get_json_config("config.json")
 
-	run_load_test(
-		args.keyspace,
-		args.table_name,
-		args.count,
-		args.parallel,
-		args.min_id,
-		args.max_id,
-		config)
+	asyncio.run(
+		run_load_test_async(
+			args.keyspace,
+			args.table_name,
+			args.count,
+			# args.parallel,
+			args.min_id,
+			args.max_id,
+			config))
 
 
 if __name__ == "__main__":
