@@ -4,14 +4,15 @@ import json
 import logging
 import os
 import random
+from concurrent.futures import ProcessPoolExecutor
 from typing import Union
 
 from cassandra.auth import PlainTextAuthProvider
 from cassandra.cluster import Cluster
 
 
-def initialize_logger() -> logging.Logger:
-	log_formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+def initialize_logger(log_prefix: str = "") -> logging.Logger:
+	log_formatter = logging.Formatter(f"%(asctime)s [%(levelname)s] {log_prefix}%(message)s")
 	root_logger = logging.getLogger()
 	root_logger.setLevel(logging.DEBUG)
 
@@ -39,12 +40,12 @@ def initialize_argument_parser() -> argparse.ArgumentParser:
 	parser = argparse.ArgumentParser()
 	parser.add_argument("-k", "--keyspace")
 	parser.add_argument("-c", "--count", type = int, help = "count of rows to insert")
-	# parser.add_argument(
-	# 	"-p",
-	# 	"--parallel",
-	# 	type = int,
-	# 	help = "count of parallel connections",
-	# 	default = 1)
+	parser.add_argument(
+		"-p",
+		"--parallel",
+		type = int,
+		help = "count of parallel connections",
+		default = 1)
 	parser.add_argument(
 		"--min-id",
 		type = int,
@@ -66,18 +67,26 @@ def get_json_config(json_file: str):
 	return json.load(file)
 
 
-async def start_test_on_new_connection_async(
-		cluster: Cluster,
+def start_test_on_new_connection(
+		number: int,
 		keyspace_name: Union[str, None],
 		table_name: str,
 		rows_count: Union[int, None],
 		min_row_id: int,
 		max_row_id: int):
-	session = cluster.connect()
-	logging.info("Connection to Cassandra established")
+	initialize_logger(f"Connection {number}: ")
 
-	if keyspace_name is not None:
-		session.set_keyspace(keyspace_name)
+	config = get_json_config("config.json")
+	username = config["username"]
+	password = config["password"]
+	hosts = config["hosts"]
+
+	logging.info("Trying to connect to Cassandra")
+	auth_provider = PlainTextAuthProvider(username = username, password = password)
+	cluster = Cluster(hosts, auth_provider = auth_provider)
+	session = cluster.connect(keyspace = keyspace_name)
+	logging.warning(f"Connection established")
+
 	query_to_prepare = f"INSERT INTO {table_name}(id, name) VALUES (?, ?)"
 	logging.info("Preparing query:" + os.linesep + query_to_prepare)
 	prepared_insert_query = session.prepare(query_to_prepare)
@@ -117,25 +126,23 @@ async def run_load_test_async(
 		keyspace_name: Union[str, None],
 		table_name: str,
 		rows_count: Union[int, None],
-		# connections_count: int,
+		connections_count: int,
 		min_row_id: int,
-		max_row_id: int,
-		config):
-	username = config["username"]
-	password = config["password"]
-	hosts = config["hosts"]
-
-	logging.info("Trying to connect to Cassandra")
-	auth_provider = PlainTextAuthProvider(username = username, password = password)
-	cluster = Cluster(hosts, auth_provider = auth_provider)
-
-	await start_test_on_new_connection_async(
-		cluster,
-		keyspace_name,
-		table_name,
-		rows_count,
-		min_row_id,
-		max_row_id)
+		max_row_id: int):
+	loop = asyncio.get_running_loop()
+	with ProcessPoolExecutor() as pool:
+		tasks = [
+			loop.run_in_executor(
+				pool,
+				start_test_on_new_connection,
+				number,
+				keyspace_name,
+				table_name,
+				rows_count,
+				min_row_id,
+				max_row_id)
+			for number in range(connections_count)]
+		await asyncio.wait(tasks)
 
 	logging.info(f"Successfully inserted into table {table_name}")
 
@@ -146,17 +153,14 @@ def main():
 	argument_parser = initialize_argument_parser()
 	args = argument_parser.parse_args()
 
-	config = get_json_config("config.json")
-
 	asyncio.run(
 		run_load_test_async(
 			args.keyspace,
 			args.table_name,
 			args.count,
-			# args.parallel,
+			args.parallel,
 			args.min_id,
-			args.max_id,
-			config))
+			args.max_id))
 
 
 if __name__ == "__main__":
