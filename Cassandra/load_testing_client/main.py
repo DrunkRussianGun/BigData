@@ -2,10 +2,11 @@ import argparse
 import asyncio
 import json
 import logging
+import multiprocessing
 import os
 import random
 from concurrent.futures import ProcessPoolExecutor
-from typing import Union
+from typing import Dict, Union
 
 from cassandra.auth import PlainTextAuthProvider
 from cassandra.cluster import Cluster, ExecutionProfile
@@ -74,7 +75,8 @@ def run_new_client(
 		table_name: str,
 		rows_count: Union[int, None],
 		min_row_id: int,
-		max_row_id: int):
+		max_row_id: int,
+		shared_rows_counts: Dict[str, int]):
 	initialize_logger(f"Client {number}: ")
 
 	config = get_json_config("config.json")
@@ -99,9 +101,11 @@ def run_new_client(
 	rows_count_str = str(rows_count) if rows_count is not None else "infinite"
 	logging.info(f"Inserting {rows_count_str} rows into table {table_name} with prepared query")
 
+	inserted_rows_count_key = f"inserted_{number}"
+	failed_rows_count_key = f"failed_{number}"
 	rows_counts = {
-		"inserted": 0,
-		"failed": 0
+		inserted_rows_count_key: 0,
+		failed_rows_count_key: 0
 	}
 
 	# noinspection PyShadowingNames
@@ -111,13 +115,13 @@ def run_new_client(
 		try:
 			session.execute(prepared_insert_query, [row_id, f"'name_{row_id}'"])
 		except Exception:
-			rows_counts["failed"] += 1
-			if rows_counts["failed"] % 1000 == 0:
-				logging.warning(f"Failed to insert {rows_counts['failed']} rows")
+			rows_counts[failed_rows_count_key] += 1
+			if rows_counts[failed_rows_count_key] % 10 == 0:
+				shared_rows_counts[failed_rows_count_key] = rows_counts[failed_rows_count_key]
 
-		rows_counts["inserted"] += 1
-		if rows_counts["inserted"] % 1000 == 0:
-			logging.info(f"Inserted {rows_counts['inserted']} rows")
+		rows_counts[inserted_rows_count_key] += 1
+		if rows_counts[inserted_rows_count_key] % 10 == 0:
+			shared_rows_counts[inserted_rows_count_key] = rows_counts[inserted_rows_count_key]
 
 	if rows_count is None:
 		while True:
@@ -125,6 +129,8 @@ def run_new_client(
 	else:
 		for _ in range(0, rows_count):
 			insert_new_row()
+
+	logging.warning(f"Finished")
 
 
 async def run_load_test_async(
@@ -134,6 +140,31 @@ async def run_load_test_async(
 		clients_count: int,
 		min_row_id: int,
 		max_row_id: int):
+	shared_rows_counts = multiprocessing.Manager().dict()
+	last_failed_rows_count = [0]
+
+	def log_rows_counts():
+		current_rows_counts = dict(shared_rows_counts)
+		inserted_rows_count = sum(
+			map(
+				lambda x: x[1],
+				filter(
+					lambda x: x[0].startswith("inserted"),
+					current_rows_counts.items())))
+		failed_rows_count = sum(
+			map(
+				lambda x: x[1],
+				filter(
+					lambda x: x[0].startswith("failed"),
+					current_rows_counts.items())))
+
+		log_message = f"Inserted {inserted_rows_count} rows, failed to insert {failed_rows_count} rows"
+		if failed_rows_count % 1000 > last_failed_rows_count[0]:
+			logging.warning(log_message)
+			last_failed_rows_count[0] = failed_rows_count
+		else:
+			logging.info(log_message)
+
 	loop = asyncio.get_running_loop()
 	with ProcessPoolExecutor() as pool:
 		tasks = [
@@ -145,11 +176,14 @@ async def run_load_test_async(
 				table_name,
 				rows_count,
 				min_row_id,
-				max_row_id)
+				max_row_id,
+				shared_rows_counts)
 			for number in range(clients_count)]
-		await asyncio.wait(tasks)
 
-	logging.info(f"Successfully inserted into table {table_name}")
+		pending_tasks = set(tasks)
+		while len(pending_tasks) > 0:
+			done_tasks, pending_tasks = await asyncio.wait(tasks, timeout = 3)
+			log_rows_counts()
 
 
 def main():
