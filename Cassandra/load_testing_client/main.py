@@ -82,7 +82,8 @@ async def start_test_on_new_connection_async(
 	logging.info("Preparing query:" + os.linesep + query_to_prepare)
 	prepared_insert_query = session.prepare(query_to_prepare)
 
-	logging.info(f"Inserting {rows_count} rows into table {table_name} with prepared query")
+	rows_count_str = str(rows_count) if rows_count is not None else "infinite"
+	logging.info(f"Inserting {rows_count_str} rows into table {table_name} with prepared query")
 
 	def insert_new_row():
 		row_id = int(round(random.uniform(min_row_id, max_row_id)))
