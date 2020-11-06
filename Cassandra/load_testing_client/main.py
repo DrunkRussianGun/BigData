@@ -85,27 +85,32 @@ async def start_test_on_new_connection_async(
 	rows_count_str = str(rows_count) if rows_count is not None else "infinite"
 	logging.info(f"Inserting {rows_count_str} rows into table {table_name} with prepared query")
 
+	rows_counts = {
+		"inserted": 0,
+		"failed": 0
+	}
+
 	# noinspection PyShadowingNames
-	def insert_new_row(inserted_rows_count):
+	def insert_new_row():
 		row_id = int(round(random.uniform(min_row_id, max_row_id)))
 		# noinspection PyBroadException
 		try:
 			session.execute(prepared_insert_query, [row_id, f"'name_{row_id}'"])
 		except Exception:
-			pass
+			rows_counts["failed"] += 1
+			if rows_counts["failed"] % 1000 == 0:
+				logging.warning(f"Failed to insert {rows_counts['failed']} rows")
 
-		if inserted_rows_count % 1000 == 0:
-			logging.info(f"Inserted {inserted_rows_count} rows")
+		rows_counts["inserted"] += 1
+		if rows_counts["inserted"] % 1000 == 0:
+			logging.info(f"Inserted {rows_counts['inserted']} rows")
 
-	inserted_rows_count = 0
 	if rows_count is None:
 		while True:
-			insert_new_row(inserted_rows_count)
-			inserted_rows_count += 1
+			insert_new_row()
 	else:
 		for _ in range(0, rows_count):
-			insert_new_row(inserted_rows_count)
-			inserted_rows_count += 1
+			insert_new_row()
 
 
 async def run_load_test_async(
