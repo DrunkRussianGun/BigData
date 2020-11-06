@@ -44,7 +44,7 @@ def initialize_argument_parser() -> argparse.ArgumentParser:
 		"-p",
 		"--parallel",
 		type = int,
-		help = "count of parallel connections",
+		help = "count of clients working in parallel",
 		default = 1)
 	parser.add_argument(
 		"--min-id",
@@ -67,14 +67,14 @@ def get_json_config(json_file: str):
 	return json.load(file)
 
 
-def start_test_on_new_connection(
+def run_new_client(
 		number: int,
 		keyspace_name: Union[str, None],
 		table_name: str,
 		rows_count: Union[int, None],
 		min_row_id: int,
 		max_row_id: int):
-	initialize_logger(f"Connection {number}: ")
+	initialize_logger(f"Client {number}: ")
 
 	config = get_json_config("config.json")
 	username = config["username"]
@@ -126,7 +126,7 @@ async def run_load_test_async(
 		keyspace_name: Union[str, None],
 		table_name: str,
 		rows_count: Union[int, None],
-		connections_count: int,
+		clients_count: int,
 		min_row_id: int,
 		max_row_id: int):
 	loop = asyncio.get_running_loop()
@@ -134,14 +134,14 @@ async def run_load_test_async(
 		tasks = [
 			loop.run_in_executor(
 				pool,
-				start_test_on_new_connection,
+				run_new_client,
 				number,
 				keyspace_name,
 				table_name,
 				rows_count,
 				min_row_id,
 				max_row_id)
-			for number in range(connections_count)]
+			for number in range(clients_count)]
 		await asyncio.wait(tasks)
 
 	logging.info(f"Successfully inserted into table {table_name}")
