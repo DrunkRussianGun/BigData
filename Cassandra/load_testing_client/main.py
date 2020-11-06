@@ -8,7 +8,8 @@ from concurrent.futures import ProcessPoolExecutor
 from typing import Union
 
 from cassandra.auth import PlainTextAuthProvider
-from cassandra.cluster import Cluster
+from cassandra.cluster import Cluster, ExecutionProfile
+from cassandra.policies import RoundRobinPolicy
 
 
 def initialize_logger(log_prefix: str = "") -> logging.Logger:
@@ -83,7 +84,11 @@ def run_new_client(
 
 	logging.info("Trying to connect to Cassandra")
 	auth_provider = PlainTextAuthProvider(username = username, password = password)
-	cluster = Cluster(hosts, auth_provider = auth_provider)
+	execution_profile = ExecutionProfile(load_balancing_policy = RoundRobinPolicy())
+	cluster = Cluster(
+		hosts,
+		auth_provider = auth_provider,
+		execution_profiles = {"default": execution_profile})
 	session = cluster.connect(keyspace = keyspace_name)
 	logging.warning(f"Connection established")
 
