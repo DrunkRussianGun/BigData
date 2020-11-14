@@ -10,7 +10,7 @@ from typing import Dict, List, Optional
 
 from cassandra.auth import PlainTextAuthProvider
 from cassandra.cluster import Cluster, ExecutionProfile
-from cassandra.policies import RoundRobinPolicy
+from cassandra.policies import WhiteListRoundRobinPolicy
 
 
 def initialize_logger(log_prefix: str = "") -> logging.Logger:
@@ -117,7 +117,7 @@ def run_load_test(
 
 	logging.info("Trying to connect to Cassandra")
 	auth_provider = PlainTextAuthProvider(username = username, password = password)
-	execution_profile = ExecutionProfile(load_balancing_policy = RoundRobinPolicy())
+	execution_profile = ExecutionProfile(load_balancing_policy = WhiteListRoundRobinPolicy(hosts))
 	cluster = Cluster(
 		hosts,
 		auth_provider = auth_provider,
