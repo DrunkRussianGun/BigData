@@ -79,14 +79,21 @@ def get_insert_query(table_name: str, table_structure) -> str:
 	return f"INSERT INTO {table_name}({columns}) VALUES ({parameters})"
 
 
+def get_random_integer(min_int_value: int, max_int_value: int) -> int:
+	return int(round(random.uniform(min_int_value, max_int_value)))
+
+
 def generate_row_values(table_structure, min_int_value: int, max_int_value: int) -> List[str]:
 	values = []
 	for column in table_structure:
-		int_value = int(round(random.uniform(min_int_value, max_int_value)))
 		if column["type"] == "int":
-			value = int_value
+			value = get_random_integer(min_int_value, max_int_value)
 		elif column["type"] == "string":
-			value = f"{column['name']}_{int_value}"
+			if "values" in column:
+				column_values = column["values"]
+				value = column_values[get_random_integer(0, len(column_values) - 1)]
+			else:
+				value = f"{column['name']}_{get_random_integer(min_int_value, max_int_value)}"
 		else:
 			raise ValueError(f"Unsupported type {column['type']} of column {column['name']}")
 		values.append(value)
