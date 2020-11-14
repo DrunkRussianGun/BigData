@@ -1,12 +1,12 @@
 import argparse
-import asyncio
 import json
 import logging
 import multiprocessing
 import os
 import random
-from concurrent.futures import ProcessPoolExecutor
-from typing import Dict, Union
+from multiprocessing.context import Process
+from time import sleep
+from typing import Dict, Optional
 
 from cassandra.auth import PlainTextAuthProvider
 from cassandra.cluster import Cluster, ExecutionProfile
@@ -69,16 +69,14 @@ def get_json_config(json_file: str):
 	return json.load(file)
 
 
-def run_new_client(
+def run_load_test(
 		number: int,
-		keyspace_name: Union[str, None],
+		keyspace_name: Optional[str],
 		table_name: str,
-		rows_count: Union[int, None],
+		rows_count: Optional[int],
 		min_row_id: int,
 		max_row_id: int,
 		shared_rows_counts: Dict[str, int]):
-	initialize_logger(f"Client {number}: ")
-
 	config = get_json_config("config.json")
 	username = config["username"]
 	password = config["password"]
@@ -133,13 +131,7 @@ def run_new_client(
 	logging.warning(f"Finished")
 
 
-async def run_load_test_async(
-		keyspace_name: Union[str, None],
-		table_name: str,
-		rows_count: Union[int, None],
-		clients_count: int,
-		min_row_id: int,
-		max_row_id: int):
+def run_load_test_clients(clients_count: int):
 	shared_rows_counts = multiprocessing.Manager().dict()
 	last_failed_rows_count = [0]
 
@@ -165,42 +157,42 @@ async def run_load_test_async(
 		else:
 			logging.info(log_message)
 
-	loop = asyncio.get_running_loop()
-	with ProcessPoolExecutor() as pool:
-		tasks = [
-			loop.run_in_executor(
-				pool,
-				run_new_client,
-				number,
-				keyspace_name,
-				table_name,
-				rows_count,
-				min_row_id,
-				max_row_id,
-				shared_rows_counts)
-			for number in range(clients_count)]
+	clients = []
+	for client_number in range(clients_count):
+		client = Process(target = main, args = (True, client_number, shared_rows_counts))
+		client.start()
+		clients.append(client)
 
-		pending_tasks = set(tasks)
-		while len(pending_tasks) > 0:
-			done_tasks, pending_tasks = await asyncio.wait(tasks, timeout = 3)
-			log_rows_counts()
+	alive_clients = clients
+	while len(alive_clients) > 0:
+		sleep(3)
+		log_rows_counts()
+		alive_clients = list(filter(lambda client: client.is_alive(), clients))
 
 
-def main():
-	initialize_logger()
+def main(
+		child_process: bool = False,
+		client_number: int = None,
+		shared_rows_counts: Dict[str, int] = None):
+	log_prefix = f"Client {client_number}: " if child_process else ""
+	initialize_logger(log_prefix)
 
 	argument_parser = initialize_argument_parser()
 	args = argument_parser.parse_args()
 
-	asyncio.run(
-		run_load_test_async(
+	if child_process:
+		run_load_test(
+			client_number,
 			args.keyspace,
 			args.table_name,
 			args.count,
-			args.parallel,
 			args.min_id,
-			args.max_id))
+			args.max_id,
+			shared_rows_counts)
+	else:
+		run_load_test_clients(args.parallel)
 
 
 if __name__ == "__main__":
+	multiprocessing.set_start_method("spawn")
 	main()
