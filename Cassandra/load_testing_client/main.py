@@ -1,16 +1,16 @@
 import argparse
-import asyncio
 import json
 import logging
 import multiprocessing
 import os
 import random
-from concurrent.futures import ProcessPoolExecutor
-from typing import Dict, Union
+from multiprocessing.context import Process
+from time import sleep
+from typing import Dict, List, Optional
 
 from cassandra.auth import PlainTextAuthProvider
 from cassandra.cluster import Cluster, ExecutionProfile
-from cassandra.policies import RoundRobinPolicy
+from cassandra.policies import WhiteListRoundRobinPolicy
 
 
 def initialize_logger(log_prefix: str = "") -> logging.Logger:
@@ -41,52 +41,90 @@ def initialize_logger(log_prefix: str = "") -> logging.Logger:
 def initialize_argument_parser() -> argparse.ArgumentParser:
 	parser = argparse.ArgumentParser()
 	parser.add_argument("-k", "--keyspace")
-	parser.add_argument("-c", "--count", type = int, help = "count of rows to insert")
+	parser.add_argument("-c", "--count", type = int, help = "count of rows to insert by each client")
 	parser.add_argument(
 		"-p",
 		"--parallel",
 		type = int,
-		help = "count of clients working in parallel",
+		help = "count of clients working in parallel (default 1)",
 		default = 1)
 	parser.add_argument(
-		"--min-id",
+		"--min-int",
 		type = int,
-		help = "minimum allowed row id (default 0)",
+		help = "minimum allowed int value in rows (default 0)",
 		default = 0)
 	parser.add_argument(
-		"--max-id",
+		"--max-int",
 		type = int,
-		help = "maximum allowed row id (default 2147483647)",
+		help = "maximum allowed int value in rows (default 2147483647)",
 		default = 2147483647)
 	parser.add_argument("table_name", metavar = "TABLE_NAME")
 	return parser
 
 
-def get_json_config(json_file: str):
-	logging.info("Reading config from JSON file " + json_file)
+def get_json(title: str, json_file: str):
+	logging.info(f"Reading {title} from JSON file {json_file}")
 
 	file = open(json_file, "r")
 	return json.load(file)
 
 
-def run_new_client(
-		number: int,
-		keyspace_name: Union[str, None],
-		table_name: str,
-		rows_count: Union[int, None],
-		min_row_id: int,
-		max_row_id: int,
-		shared_rows_counts: Dict[str, int]):
-	initialize_logger(f"Client {number}: ")
+def get_table_structure_key(keyspace_name: Optional[str], table_name: str) -> str:
+	return f"{keyspace_name}.{table_name}" if keyspace_name is not None else table_name
 
-	config = get_json_config("config.json")
+
+def get_insert_query(table_name: str, table_structure) -> str:
+	columns = ", ".join(column["name"] for column in table_structure)
+	parameters = ", ".join("?" for _ in range(len(table_structure)))
+	return f"INSERT INTO {table_name}({columns}) VALUES ({parameters})"
+
+
+def get_random_integer(min_int_value: int, max_int_value: int) -> int:
+	return int(round(random.uniform(min_int_value, max_int_value)))
+
+
+def generate_row_values(table_structure, min_int_value: int, max_int_value: int) -> List[str]:
+	values = []
+	for column in table_structure:
+		if column["type"] == "int":
+			value = get_random_integer(min_int_value, max_int_value)
+		elif column["type"] == "string":
+			if "values" in column:
+				column_values = column["values"]
+				value = column_values[get_random_integer(0, len(column_values) - 1)]
+			else:
+				value = f"{column['name']}_{get_random_integer(min_int_value, max_int_value)}"
+		else:
+			raise ValueError(f"Unsupported type {column['type']} of column {column['name']}")
+		values.append(value)
+	return values
+
+
+def run_load_test(
+		number: int,
+		keyspace_name: Optional[str],
+		table_name: str,
+		rows_count: Optional[int],
+		min_int_value: int,
+		max_int_value: int,
+		shared_rows_counts: Dict[str, int]):
+	tables_file_name = "tables.json"
+	tables = dict(
+		(get_table_structure_key(structure["keyspace"], structure["table"]), structure["structure"])
+		for structure in get_json("table structures", tables_file_name))
+	table_structure_key = get_table_structure_key(keyspace_name, table_name)
+	if table_structure_key not in tables:
+		raise RuntimeError(f"Structure of table {table_structure_key} not found in file {tables_file_name}")
+	table_structure = tables[table_structure_key]
+
+	config = get_json("config", "config.json")
 	username = config["username"]
 	password = config["password"]
 	hosts = config["hosts"]
 
 	logging.info("Trying to connect to Cassandra")
 	auth_provider = PlainTextAuthProvider(username = username, password = password)
-	execution_profile = ExecutionProfile(load_balancing_policy = RoundRobinPolicy())
+	execution_profile = ExecutionProfile(load_balancing_policy = WhiteListRoundRobinPolicy(hosts))
 	cluster = Cluster(
 		hosts,
 		auth_provider = auth_provider,
@@ -94,7 +132,7 @@ def run_new_client(
 	session = cluster.connect(keyspace = keyspace_name)
 	logging.warning(f"Connection established")
 
-	query_to_prepare = f"INSERT INTO {table_name}(id, name) VALUES (?, ?)"
+	query_to_prepare = get_insert_query(table_name, table_structure)
 	logging.info("Preparing query:" + os.linesep + query_to_prepare)
 	prepared_insert_query = session.prepare(query_to_prepare)
 
@@ -110,10 +148,10 @@ def run_new_client(
 
 	# noinspection PyShadowingNames
 	def insert_new_row():
-		row_id = int(round(random.uniform(min_row_id, max_row_id)))
+		row_values = generate_row_values(table_structure, min_int_value, max_int_value)
 		# noinspection PyBroadException
 		try:
-			session.execute(prepared_insert_query, [row_id, f"'name_{row_id}'"])
+			session.execute(prepared_insert_query, row_values)
 		except Exception:
 			rows_counts[failed_rows_count_key] += 1
 			if rows_counts[failed_rows_count_key] % 10 == 0:
@@ -133,13 +171,7 @@ def run_new_client(
 	logging.warning(f"Finished")
 
 
-async def run_load_test_async(
-		keyspace_name: Union[str, None],
-		table_name: str,
-		rows_count: Union[int, None],
-		clients_count: int,
-		min_row_id: int,
-		max_row_id: int):
+def run_load_test_clients(clients_count: int):
 	shared_rows_counts = multiprocessing.Manager().dict()
 	last_failed_rows_count = [0]
 
@@ -165,42 +197,42 @@ async def run_load_test_async(
 		else:
 			logging.info(log_message)
 
-	loop = asyncio.get_running_loop()
-	with ProcessPoolExecutor() as pool:
-		tasks = [
-			loop.run_in_executor(
-				pool,
-				run_new_client,
-				number,
-				keyspace_name,
-				table_name,
-				rows_count,
-				min_row_id,
-				max_row_id,
-				shared_rows_counts)
-			for number in range(clients_count)]
+	clients = []
+	for client_number in range(clients_count):
+		client = Process(target = main, args = (True, client_number, shared_rows_counts))
+		client.start()
+		clients.append(client)
 
-		pending_tasks = set(tasks)
-		while len(pending_tasks) > 0:
-			done_tasks, pending_tasks = await asyncio.wait(tasks, timeout = 3)
-			log_rows_counts()
+	alive_clients = clients
+	while len(alive_clients) > 0:
+		sleep(3)
+		log_rows_counts()
+		alive_clients = list(filter(lambda client: client.is_alive(), clients))
 
 
-def main():
-	initialize_logger()
+def main(
+		child_process: bool = False,
+		client_number: int = None,
+		shared_rows_counts: Dict[str, int] = None):
+	log_prefix = f"Client {client_number}: " if child_process else ""
+	initialize_logger(log_prefix)
 
 	argument_parser = initialize_argument_parser()
 	args = argument_parser.parse_args()
 
-	asyncio.run(
-		run_load_test_async(
+	if child_process:
+		run_load_test(
+			client_number,
 			args.keyspace,
 			args.table_name,
 			args.count,
-			args.parallel,
-			args.min_id,
-			args.max_id))
+			args.min_int,
+			args.max_int,
+			shared_rows_counts)
+	else:
+		run_load_test_clients(args.parallel)
 
 
 if __name__ == "__main__":
+	multiprocessing.set_start_method("spawn")
 	main()
