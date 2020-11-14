@@ -41,12 +41,12 @@ def initialize_logger(log_prefix: str = "") -> logging.Logger:
 def initialize_argument_parser() -> argparse.ArgumentParser:
 	parser = argparse.ArgumentParser()
 	parser.add_argument("-k", "--keyspace")
-	parser.add_argument("-c", "--count", type = int, help = "count of rows to insert")
+	parser.add_argument("-c", "--count", type = int, help = "count of rows to insert by each client")
 	parser.add_argument(
 		"-p",
 		"--parallel",
 		type = int,
-		help = "count of clients working in parallel",
+		help = "count of clients working in parallel (default 1)",
 		default = 1)
 	parser.add_argument(
 		"--min-int",
