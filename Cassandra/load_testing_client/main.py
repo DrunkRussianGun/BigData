@@ -6,7 +6,7 @@ import os
 import random
 from multiprocessing.context import Process
 from time import sleep
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from cassandra.auth import PlainTextAuthProvider
 from cassandra.cluster import Cluster, ExecutionProfile
@@ -49,24 +49,48 @@ def initialize_argument_parser() -> argparse.ArgumentParser:
 		help = "count of clients working in parallel",
 		default = 1)
 	parser.add_argument(
-		"--min-id",
+		"--min-int",
 		type = int,
-		help = "minimum allowed row id (default 0)",
+		help = "minimum allowed int value in rows (default 0)",
 		default = 0)
 	parser.add_argument(
-		"--max-id",
+		"--max-int",
 		type = int,
-		help = "maximum allowed row id (default 2147483647)",
+		help = "maximum allowed int value in rows (default 2147483647)",
 		default = 2147483647)
 	parser.add_argument("table_name", metavar = "TABLE_NAME")
 	return parser
 
 
-def get_json_config(json_file: str):
-	logging.info("Reading config from JSON file " + json_file)
+def get_json(title: str, json_file: str):
+	logging.info(f"Reading {title} from JSON file {json_file}")
 
 	file = open(json_file, "r")
 	return json.load(file)
+
+
+def get_table_structure_key(keyspace_name: Optional[str], table_name: str) -> str:
+	return f"{keyspace_name}.{table_name}" if keyspace_name is not None else table_name
+
+
+def get_insert_query(table_name: str, table_structure) -> str:
+	columns = ", ".join(column["name"] for column in table_structure)
+	parameters = ", ".join("?" for _ in range(len(table_structure)))
+	return f"INSERT INTO {table_name}({columns}) VALUES ({parameters})"
+
+
+def generate_row_values(table_structure, min_int_value: int, max_int_value: int) -> List[str]:
+	values = []
+	for column in table_structure:
+		int_value = int(round(random.uniform(min_int_value, max_int_value)))
+		if column["type"] == "int":
+			value = int_value
+		elif column["type"] == "string":
+			value = f"{column['name']}_{int_value}"
+		else:
+			raise ValueError(f"Unsupported type {column['type']} of column {column['name']}")
+		values.append(value)
+	return values
 
 
 def run_load_test(
@@ -74,10 +98,19 @@ def run_load_test(
 		keyspace_name: Optional[str],
 		table_name: str,
 		rows_count: Optional[int],
-		min_row_id: int,
-		max_row_id: int,
+		min_int_value: int,
+		max_int_value: int,
 		shared_rows_counts: Dict[str, int]):
-	config = get_json_config("config.json")
+	tables_file_name = "tables.json"
+	tables = dict(
+		(get_table_structure_key(structure["keyspace"], structure["table"]), structure["structure"])
+		for structure in get_json("table structures", tables_file_name))
+	table_structure_key = get_table_structure_key(keyspace_name, table_name)
+	if table_structure_key not in tables:
+		raise RuntimeError(f"Structure of table {table_structure_key} not found in file {tables_file_name}")
+	table_structure = tables[table_structure_key]
+
+	config = get_json("config", "config.json")
 	username = config["username"]
 	password = config["password"]
 	hosts = config["hosts"]
@@ -92,7 +125,7 @@ def run_load_test(
 	session = cluster.connect(keyspace = keyspace_name)
 	logging.warning(f"Connection established")
 
-	query_to_prepare = f"INSERT INTO {table_name}(id, name) VALUES (?, ?)"
+	query_to_prepare = get_insert_query(table_name, table_structure)
 	logging.info("Preparing query:" + os.linesep + query_to_prepare)
 	prepared_insert_query = session.prepare(query_to_prepare)
 
@@ -108,10 +141,10 @@ def run_load_test(
 
 	# noinspection PyShadowingNames
 	def insert_new_row():
-		row_id = int(round(random.uniform(min_row_id, max_row_id)))
+		row_values = generate_row_values(table_structure, min_int_value, max_int_value)
 		# noinspection PyBroadException
 		try:
-			session.execute(prepared_insert_query, [row_id, f"'name_{row_id}'"])
+			session.execute(prepared_insert_query, row_values)
 		except Exception:
 			rows_counts[failed_rows_count_key] += 1
 			if rows_counts[failed_rows_count_key] % 10 == 0:
@@ -186,8 +219,8 @@ def main(
 			args.keyspace,
 			args.table_name,
 			args.count,
-			args.min_id,
-			args.max_id,
+			args.min_int,
+			args.max_int,
 			shared_rows_counts)
 	else:
 		run_load_test_clients(args.parallel)
